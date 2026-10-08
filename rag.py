@@ -1,11 +1,11 @@
 """
 SarkarIntel RAG pipeline.
 Handles PDF discovery, text extraction, chunking, embedding, and FAISS retrieval.
+Uses Ollama for local LLM inference — no API keys required.
 """
 
 import os
 import glob
-import textwrap
 from typing import List, Tuple, Dict
 
 import fitz  # PyMuPDF
@@ -167,56 +167,88 @@ def retrieve_from_upload(
     return retrieve(query, index, metadata, model, top_k)
 
 
-# ── LLM call ──────────────────────────────────────────────────────────────────
+# ── LLM call (Ollama — local, no API key required) ───────────────────────────
 
-def build_prompt(query: str, context_chunks: List[Dict], is_upload: bool = False) -> str:
-    context_text = "\n\n".join(
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_HOST  = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+SYSTEM_PROMPT = (
+    "You are SI, the AI assistant for SarkarIntel. "
+    "Answer the user's question ONLY using the supplied document context. "
+    "Do not use outside knowledge. "
+    "Do not invent government schemes, eligibility requirements, financial amounts, "
+    "dates, deadlines, authorities, or procedures. "
+    "If the supplied context does not contain enough information to answer the question, say: "
+    "'I couldn't find this information in the available government documents.' "
+    "Always cite the source document and page number for every piece of information you use."
+)
+
+
+def build_context(context_chunks: List[Dict]) -> str:
+    return "\n\n".join(
         f"[{c['filename']} — Page {c['page']}]\n{c['text']}"
         for c in context_chunks
     )
-    source_label = "the uploaded document" if is_upload else "the retrieved government documents"
-    return f"""You are SI, an AI assistant for SarkarIntel.
-You MUST answer ONLY using the context provided below.
-Do NOT use any general knowledge or information outside this context.
-Do NOT invent facts, schemes, eligibility criteria, financial amounts, or dates.
-If the answer is not present in the context, reply exactly:
-"I couldn't find this information in the {'uploaded document' if is_upload else 'available government documents'}."
-
-Context (from {source_label}):
-{context_text}
-
-Question: {query}
-
-Answer:"""
 
 
-def call_llm(prompt: str) -> str:
+def call_ollama(query: str, context_chunks: List[Dict], is_upload: bool = False) -> str:
     """
-    Call the configured LLM.  Supports:
-      - OpenAI-compatible API  (OPENAI_API_KEY)
-      - Google Gemini          (GEMINI_API_KEY)
-    Set the relevant environment variable before running.
+    Call the local Ollama service.
+    Returns the model response, or a user-friendly error string.
+    No API key required.
     """
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    import urllib.request
+    import urllib.error
+    import json
 
-    if openai_key:
-        from openai import OpenAI
-        client = OpenAI(api_key=openai_key)
-        response = client.chat.completions.create(
-            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-        return response.choices[0].message.content.strip()
-
-    if gemini_key:
-        import google.generativeai as genai
-        genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel(os.environ.get("GEMINI_MODEL", "gemini-1.5-flash"))
-        response = model.generate_content(prompt)
-        return response.text.strip()
-
-    raise EnvironmentError(
-        "No LLM API key found. Set OPENAI_API_KEY or GEMINI_API_KEY as an environment variable."
+    not_found_msg = (
+        "I couldn't find this information in the uploaded document."
+        if is_upload else
+        "I couldn't find this information in the available government documents."
     )
+
+    context_text = build_context(context_chunks)
+    source_label = "the uploaded document" if is_upload else "the government documents"
+
+    user_message = (
+        f"Context (from {source_label}):\n{context_text}\n\n"
+        f"Question: {query}"
+    )
+
+    payload = json.dumps({
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": user_message},
+        ],
+        "stream": False,
+        "options": {"temperature": 0},
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode())
+            return data["message"]["content"].strip()
+    except urllib.error.URLError:
+        raise OllamaUnavailableError(
+            "SI's local AI model is unavailable. "
+            "Please install Ollama (https://ollama.com) and run: "
+            f"ollama pull {OLLAMA_MODEL}"
+        )
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise OllamaUnavailableError(
+            f"Unexpected response from Ollama: {exc}. "
+            f"Make sure the model '{OLLAMA_MODEL}' is downloaded: "
+            f"ollama pull {OLLAMA_MODEL}"
+        )
+
+
+class OllamaUnavailableError(Exception):
+    """Raised when Ollama is not running or the model is missing."""

@@ -1,137 +1,103 @@
-# SarkarIntel 🇮🇳
+# SarkarIntel — SI
 
-**SarkarIntel** is an AI-powered government information retrieval and RAG chatbot.  
-Ask questions about Indian government schemes, scholarships, and policies — SI answers using only the actual government documents you provide.
+**SarkarIntel** (SI) is a local RAG (Retrieval-Augmented Generation) chatbot that lets you query Indian government scheme documents using a fully local AI model.
 
----
-
-## What is SI?
-
-**SI** (SarkarIntel Intelligence) is the chatbot powering SarkarIntel.  
-SI retrieves relevant passages from government PDFs and answers your questions based solely on those passages.  
-SI never invents facts, schemes, eligibility criteria, financial amounts, or dates.
+> **No OpenAI API key required. No Gemini API key required. No paid cloud API of any kind.**
 
 ---
 
-## RAG Architecture
+## What is SarkarIntel?
+
+SI answers questions about government schemes, scholarships, and policies by:
+
+1. Extracting text from government PDFs (PyMuPDF)
+2. Chunking and embedding text (Sentence Transformers — `all-MiniLM-L6-v2`)
+3. Storing embeddings in a FAISS vector index
+4. Retrieving the most relevant chunks for each query
+5. Sending those chunks to a **locally running Ollama LLM** for a grounded answer
+6. Returning the answer with source document and page citations
+
+SI never fabricates information. If the answer isn't in the documents, it says so.
+
+---
+
+## Architecture
 
 ```
 Government PDFs (data/documents/)
-        │
-        ▼
-PyMuPDF text extraction  (page-by-page)
-        │
-        ▼
-Text chunking  (~400 chars, 80-char overlap)
-        │
-        ▼
-Sentence Transformer embeddings  (all-MiniLM-L6-v2)
-        │
-        ▼
-FAISS flat-L2 vector index
-        │
-        ▼
+        ↓
+PyMuPDF — page-aware text extraction
+        ↓
+Text chunking (400-char chunks, 80-char overlap)
+        ↓
+Sentence Transformer embeddings (all-MiniLM-L6-v2)
+        ↓
+FAISS flat index
+        ↓
 Top-5 relevant chunks retrieved
-        │
-        ▼
-LLM (OpenAI / Gemini)
-        │
-        ▼
-Grounded answer  +  Source: filename — Page N
+        ↓
+Local Ollama LLM (llama3.2:3b)
+        ↓
+Grounded answer + source citations (filename + page)
 ```
 
 ---
 
-## Features
+## Requirements
 
-- **Automatic PDF discovery** — detects all `.pdf` files in `Data/documents/` without hardcoding filenames.
-- **Page-level metadata** — every answer cites the exact source document and page number.
-- **Grounded answers only** — SI refuses to answer from general knowledge; if the answer isn't in the documents, it says so.
-- **PDF upload** — upload any PDF and query it independently; uploaded documents are never mixed with the permanent government dataset.
-- **Streamlit caching** — documents are indexed once per session; re-asking questions is fast.
-- **English-only MVP** — no language selection or translation in this version.
-
----
-
-## Project Structure
-
-```
-SarkarIntel/
-├── app.py                  # Streamlit UI
-├── rag.py                  # RAG pipeline
-├── requirements.txt
-├── README.md
-├── tests/
-│   └── test_retrieval.py
-└── Data/
-    └── documents/
-        └── *.pdf           # Government PDFs (do not rename or move)
-```
+- Python 3.10+
+- [Ollama](https://ollama.com) installed and running locally
 
 ---
 
 ## Installation
 
+### 1. Clone the repository
+
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/SarkarIntel.git
+git clone <repo-url>
 cd SarkarIntel
+```
 
-# 2. Create and activate a virtual environment
-python -m venv venv
-# Windows
-venv\Scripts\activate
-# macOS / Linux
-source venv/bin/activate
+### 2. Install Python dependencies
 
-# 3. Install dependencies
+```bash
 pip install -r requirements.txt
 ```
 
----
+### 3. Install Ollama
 
-## API Key Configuration
+Download and install from [https://ollama.com](https://ollama.com).
 
-SarkarIntel requires **one** LLM API key.  
-Set it as an environment variable — **never hardcode keys**.
-
-### Option A — OpenAI
+On most systems Ollama starts automatically as a background service.
+If it doesn't, start it manually:
 
 ```bash
-# Windows PowerShell
-$env:OPENAI_API_KEY = "sk-..."
-
-# macOS / Linux
-export OPENAI_API_KEY="sk-..."
+ollama serve
 ```
 
-To use a specific model (default: `gpt-4o-mini`):
+### 4. Download the model
 
 ```bash
-export OPENAI_MODEL="gpt-4o"
+ollama pull llama3.2:3b
 ```
 
-### Option B — Google Gemini
+This downloads the default model (~2 GB). It only needs to be done once.
 
-```bash
-export GEMINI_API_KEY="AIza..."
-# Optional: override model (default: gemini-1.5-flash)
-export GEMINI_MODEL="gemini-1.5-pro"
+### 5. Add government PDFs
+
+Place PDF files in:
+
+```
+Data/documents/
 ```
 
-### Streamlit Community Cloud
-
-Add secrets in **App Settings → Secrets**:
-
-```toml
-OPENAI_API_KEY = "sk-..."
-# or
-GEMINI_API_KEY = "AIza..."
-```
+The 15 government scheme PDFs are already included in this folder.
+Do **not** rename, move, or delete them.
 
 ---
 
-## Running the Application
+## Running the app
 
 ```bash
 streamlit run app.py
@@ -141,94 +107,114 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
 
-## Example Questions
+## Configuration
 
-```
-What is the income limit for the PM-USP scholarship?
-What are the eligibility criteria for the NMMS scholarship?
-How much loan can be taken under PM SVANidhi?
-What are the objectives of Sukanya Samriddhi Account Scheme?
-Who is eligible for DEPD benefits?
-What is the lock-in period for APY?
-```
+The model name and Ollama host are configurable via environment variables:
 
----
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_MODEL` | `llama3.2:3b` | Ollama model to use |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
 
-## PDF Upload Behavior
-
-1. Click **"📎 Upload a PDF to query"** in the sidebar expander.
-2. Upload any PDF document.
-3. Prefix your question with `upload:` to query the uploaded document only.
-
-**Example:**
-
-```
-upload: What are the eligibility requirements?
-```
-
-**SI responds:**
-
-```
-According to the uploaded document:
-
-<answer from the uploaded PDF>
-
-Source:
-my_document.pdf — Page 3
-```
-
-**Important rules:**
-- Uploaded PDFs are **never** added to `Data/documents/`.
-- The permanent government dataset is **not** searched when you use the `upload:` prefix.
-- If the answer isn't in the uploaded PDF, SI responds: *"I couldn't find this information in the uploaded document."*
-
----
-
-## Source Citation Behavior
-
-Every answer includes a **Sources** block:
-
-```
-Sources:
-NMMSSGuidelines.pdf — Page 4
-CSSS_GUIDLINES_.pdf — Page 2
-```
-
-- Sources come directly from retrieved chunk metadata.
-- Duplicate source references are automatically deduplicated.
-- No source is fabricated.
-
----
-
-## Running Tests
+Example (use a different model):
 
 ```bash
-pytest tests/ -v
+OLLAMA_MODEL=llama3.1:8b streamlit run app.py
+```
+
+No API keys are ever needed.
+
+---
+
+## Features
+
+### Government knowledge base
+- Automatically discovers all PDFs in `Data/documents/`
+- Indexes them on first run (cached — not re-indexed on every question)
+- Answers cite the source filename and page number
+
+### PDF upload
+- Upload any PDF from the sidebar to query it independently
+- Prefix your question with `upload:` to query the uploaded document
+- Uploaded documents are **never** added to the permanent knowledge base
+- Uploaded-document answers always start with **"According to the uploaded document:"**
+
+### Grounded answers
+- SI only answers from retrieved document context
+- If the answer isn't present: *"I couldn't find this information in the available government documents."*
+- No hallucination, no outside knowledge
+
+### Error handling
+- Ollama not running → clear install/start instructions shown in the UI
+- Model not downloaded → instructions to run `ollama pull`
+- No PDFs found → warning with folder path
+- Uploaded PDF with no readable text → clear error, no crash
+
+---
+
+## Project structure
+
+```
+SarkarIntel/
+├── app.py                  # Streamlit UI
+├── rag.py                  # RAG pipeline (extraction, embeddings, FAISS, Ollama)
+├── requirements.txt
+├── README.md
+├── tests/
+│   └── test_retrieval.py   # Retrieval tests
+└── Data/
+    └── documents/
+        └── *.pdf           # Government scheme PDFs (do not modify)
+```
+
+---
+
+## Running tests
+
+```bash
+pytest tests/
 ```
 
 Tests verify:
-1. PDFs are discovered from `Data/documents/`.
-2. Text is extractable from PDFs.
-3. Page metadata is preserved in every chunk.
-4. FAISS retrieval returns relevant results.
+- PDFs are discovered in `Data/documents/`
+- Text is extracted from PDFs
+- Page metadata (filename + page number) is preserved in every chunk
+- FAISS retrieval returns relevant results
+
+> **Note:** The full test suite builds the FAISS index, which may take a minute on first run.
 
 ---
 
-## Streamlit Community Cloud Deployment
+## Dependencies
 
-1. Push the repository to GitHub (include `Data/documents/` with your PDFs).
-2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**.
-3. Select your repo, branch `main`, main file `app.py`.
-4. Under **Advanced settings → Secrets**, add your API key:
-   ```toml
-   OPENAI_API_KEY = "sk-..."
-   ```
-5. Click **Deploy**.
+| Package | Purpose |
+|---|---|
+| `streamlit` | Web UI |
+| `pymupdf` | PDF text extraction |
+| `sentence-transformers` | Text embeddings |
+| `faiss-cpu` | Vector similarity search |
+| `pytest` | Testing |
 
-> **Note:** Streamlit Community Cloud has a free-tier memory limit (~1 GB). If your PDFs are large, consider reducing `CHUNK_SIZE` in `rag.py` or using a smaller embedding model.
+No OpenAI SDK. No Gemini SDK. No paid API.
 
 ---
 
-## License
+## Included documents
 
-MIT
+| File | Scheme |
+|---|---|
+| APY.pdf | Atal Pension Yojana |
+| CSSS_GUIDLINES_.pdf | Central Sector Scholarship Scheme |
+| DEPDGuidelines.pdf | DEPD Guidelines |
+| Guidlines_3099.pdf | Scheme Guidelines |
+| NMMSSGuidelines.pdf | National Means-cum-Merit Scholarship |
+| PMKVY-4.0-Guidelines.pdf | Pradhan Mantri Kaushal Vikas Yojana 4.0 |
+| pm_sva_nidhi_loan_operational_guidelines.pdf | PM SVANidhi Loan |
+| pm_sva_nidhi_scheme_guidelines.pdf | PM SVANidhi Scheme |
+| SBM(G)_Guidelines.pdf | Swachh Bharat Mission (Grameen) |
+| SukanyaSamriddhiAccountScheme2019English.pdf | Sukanya Samriddhi Account |
+| + 5 additional government documents | Various schemes |
+
+---
+
+*SarkarIntel — Powered by local AI. No cloud. No API key.*
